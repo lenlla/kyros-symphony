@@ -187,11 +187,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp start_port(workspace, nil) do
-    executable = System.find_executable("bash")
-
-    if is_nil(executable) do
-      {:error, :bash_not_found}
-    else
+    with {:ok, executable, args} <- local_launch_args() do
       port =
         Port.open(
           {:spawn_executable, String.to_charlist(executable)},
@@ -199,7 +195,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             :binary,
             :exit_status,
             :stderr_to_stdout,
-            args: [~c"-lc", String.to_charlist(Config.settings!().codex.command)],
+            args: Enum.map(args, &String.to_charlist/1),
             cd: String.to_charlist(workspace),
             line: @port_line_bytes
           ]
@@ -212,6 +208,29 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp start_port(workspace, worker_host) when is_binary(worker_host) do
     remote_command = remote_launch_command(workspace)
     SSH.start_port(worker_host, remote_command, line: @port_line_bytes)
+  end
+
+  defp local_launch_args do
+    case {System.find_executable("node"), app_server_bridge_path(), System.find_executable("bash")} do
+      {node, bridge, _bash} when is_binary(node) and is_binary(bridge) ->
+        {:ok, node, [bridge, Config.settings!().codex.command]}
+
+      {_node, _bridge, bash} when is_binary(bash) ->
+        {:ok, bash, ["-lc", Config.settings!().codex.command]}
+
+      _ ->
+        {:error, :bash_not_found}
+    end
+  end
+
+  defp app_server_bridge_path do
+    candidate =
+      case :code.priv_dir(:symphony_elixir) do
+        priv_dir when is_list(priv_dir) -> Path.join(to_string(priv_dir), "codex_stdio_bridge.mjs")
+        {:error, _reason} -> Path.expand("priv/codex_stdio_bridge.mjs")
+      end
+
+    if File.regular?(candidate), do: candidate
   end
 
   defp remote_launch_command(workspace) when is_binary(workspace) do
